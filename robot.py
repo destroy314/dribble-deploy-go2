@@ -91,10 +91,10 @@ sim_idx_to_real_idx = [id_to_real_index[name_to_id[name]] for name in sim_index_
 # thus, we need to use `real_index_to_id[i] for i in range(num_joints)`
 # instead of `for id in real_index_to_id.values()`
 real_idx_to_sim_idx = [name_to_sim_index[id_to_name[real_index_to_id[i]]] for i in range(num_joints)]
+# [3, 4, 5, 0, 1, 2, 9, 10, 11, 6, 7, 8]
 
 q0_sim = [name_to_q0[name] for name in sim_index_to_name]
 q0_real = [name_to_q0[id_to_name[real_index_to_id[i]]] for i in range(num_joints)]
-
 
 @dataclass
 class RobotObservation:
@@ -132,11 +132,13 @@ class Robot(Node):
         # reuse the Struct object explicitly for clarity, not performance
         self.rocker_struct = struct.Struct('@5f')
 
-        self.Δq_real = [None for _ in range(12)]
+        self.Δq_real = [None for _ in range(12)] # in real order
         self.q_setted = False
         self.to_damp()
 
         self.stopped = Event()
+
+        self.publisher_ = self.create_publisher(Float32MultiArray, 'ball_velocity', 10)
 
         # ChannelFactoryInitialize(0, "eth0")
         ChannelFactoryInitialize(0)
@@ -156,8 +158,6 @@ class Robot(Node):
             time.sleep(0.01)
         self.background_thread = Thread(target=self._send_loop, daemon=True)
         self.background_thread.start()
-
-        self.publisher_ = self.create_publisher(Float32MultiArray, 'ball_velocity', 10)
 
     def WirelessControllerHandler(self,msg: WirelessController_):
         self.L1 = True if msg.keys == 2 else False

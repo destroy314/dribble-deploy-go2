@@ -1,9 +1,10 @@
 import math
-from pathlib import Path
 import time
+from pathlib import Path
 
 import torch
 import rclpy
+import numpy as np
 from rclpy.node import Node
 from std_msgs.msg import Float32MultiArray
 from threading import Thread
@@ -11,12 +12,9 @@ from threading import Thread
 from utils.math_utils import project_gravity, wrap_to_pi
 from robot import Robot, RobotObservation
 
-dof_map = [ # from isaacgym simulation joint order to real robot joint order
-    3, 4, 5,
-    0, 1, 2,
-    9, 10, 11,
-    6, 7, 8,
-]
+device = "cuda:0"
+
+# in sim order
 clip_actions_high=[
     1.494,
     3.932,
@@ -45,17 +43,12 @@ clip_actions_low= [
     -2.926,
     -2.042
 ]
-th_clip_actions_high = []
-th_clip_actions_low = []
-for i in range(12):
-    th_clip_actions_high.append(clip_actions_high[dof_map[i]])
-    th_clip_actions_low.append(clip_actions_low[dof_map[i]])
-th_clip_actions_high = torch.tensor(th_clip_actions_high,device="cuda:0")
-th_clip_actions_low = torch.tensor(th_clip_actions_low,device="cuda:0")
+th_clip_actions_high = torch.tensor(clip_actions_high,device=device)
+th_clip_actions_low = torch.tensor(clip_actions_low,device=device)
 
 def load_policy(root: Path):
-    body = torch.jit.load("/home/unitree/dribble-deploy-go2/body.jit", map_location='cuda:0')
-    adaptation_module = torch.jit.load("/home/unitree/dribble-deploy-go2/adaptation_module.jit", map_location='cuda:0')
+    body = torch.jit.load(root / "models/body_56000.jit", map_location='cuda:0')
+    adaptation_module = torch.jit.load(root / "models/adaptation_module_56000.jit", map_location='cuda:0')
 
     @torch.no_grad()
     def policy(stacked_history: torch.Tensor):
@@ -88,20 +81,19 @@ class DribbleEnv():
     dt = control_decimation * simulation_dt
 
     action_scale = 0.25
-    hip_scale_reduction = torch.tensor([0.5, 1, 1] * 4, dtype=torch.float32,device="cuda:0")
+    hip_scale_reduction = torch.tensor([0.5, 1, 1] * 4, dtype=torch.float32,device=device)
 
     def __init__(self, history_len: int, robot: Robot):
         assert history_len > 0
 
         self.history_len = history_len
-        self.buffer = torch.zeros(history_len * 3, self.obs_dim, dtype=torch.float32,device="cuda:0")
+        self.buffer = torch.zeros(history_len * 3, self.obs_dim, dtype=torch.float32,device=device)
         self.t = history_len
 
-        self.action_t = torch.zeros(self.act_dim, dtype=torch.float32,device="cuda:0")
-        self.action_t_minus1 = torch.zeros(self.act_dim, dtype=torch.float32,device="cuda:0")
+        self.action_t = torch.zeros(self.act_dim, dtype=torch.float32,device=device)
+        self.action_t_minus1 = torch.zeros(self.act_dim, dtype=torch.float32,device=device)
 
         self.gait_index = 0.0
-
         self.yaw_init = 0.0
 
         self.robot = robot
@@ -124,6 +116,7 @@ class DribbleEnv():
         self.t = t + 1
 
     def advance(self, action: torch.Tensor):
+        """action: in sim order"""
         self.action_t_minus1[:] = self.action_t
         self.action_t[:] = action
 
@@ -135,7 +128,7 @@ class DribbleEnv():
         self.gait_index = (self.gait_index + self.step_frequency * self.dt) % 1
 
     def make_obs(self, robot_obs: RobotObservation) -> torch.Tensor:
-        ball_pos = torch.tensor(self.ball_position,device="cuda:0")
+        ball_pos = torch.tensor(self.ball_position,device=device)
         projected_gravity = project_gravity(robot_obs.quaternion)
         commands = [
             # rocker x: left/right
@@ -172,11 +165,11 @@ class DribbleEnv():
                 *commands,
                 *dof_pos,
                 *dof_vel,
-            ], dtype=torch.float32,device="cuda:0"),
+            ], dtype=torch.float32,device=device),
             action, last_action,
-            torch.tensor([*clock, yaw, timing], dtype=torch.float32,device="cuda:0"),
+            torch.tensor([*clock, yaw, timing], dtype=torch.float32,device=device),
         ])
-        return obs.to("cuda:0")
+        return obs.to(device)
 
     def clock(self):
         return [
@@ -197,7 +190,7 @@ class BallSubscriber(Node):
         self.subscription  # prevent unused variable warning
 
     def listener_callback(self, msg):
-        self.env.ball_position = msg.data
+        self.env.ball_position = np.array(msg.data) / 1000.0
         assert len(self.env.ball_position) == 3
 
 
@@ -213,7 +206,7 @@ def main():
     print('Robot initialized, press L1 to stand')
     while True:
         obs, robot_obs = env.observe()
-        env.advance(torch.zeros(12, dtype=torch.float32,device="cuda:0"))
+        env.advance(torch.zeros(12, dtype=torch.float32,device=device))
         if robot_obs.L1:
             break
         time.sleep(env.dt)
@@ -223,7 +216,7 @@ def main():
     print('Robot ready, press L1 to start')
     while True:
         obs, robot_obs = env.observe()
-        env.advance(torch.zeros(12, dtype=torch.float32,device="cuda:0"))
+        env.advance(torch.zeros(12, dtype=torch.float32,device=device))
         if robot_obs.L1:
             break
         time.sleep(env.dt)
@@ -233,23 +226,33 @@ def main():
 
     robot.to_run()
     i = 0
+    all_obs=[]
+    all_actions=[]
     while True:
         begin = time.perf_counter()
         obs, robot_obs = env.observe()
+        all_obs.append(obs[14,21:33].cpu().numpy())
+        all_actions.append(obs[14,45:57].cpu().numpy())
         if i == 0:
             save_observation_to_file(obs[14], mode="w")
         else:
             save_observation_to_file(obs[14], mode="a")
         i += 1
-        action = policy(obs.to("cuda:0"))
+        action = policy(obs)
         env.advance(action)
         if robot_obs.L2:
             break
         end = time.perf_counter()
+        print(end-begin)
         time.sleep(max(0, begin + env.dt - end))
 
+    all_obs=np.array(all_obs)
+    all_actions=np.array(all_actions)
+    np.save("all_obs",all_obs,allow_pickle=False)
+    np.save("all_actions",all_actions,allow_pickle=False)
+
     robot.to_damp()
-    time.sleep(1)
+    time.sleep(2)
     robot.to_relax()
     print('Robot relaxed, press L2 to quit')
     while True:
