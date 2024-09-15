@@ -1,19 +1,18 @@
 import importlib.machinery
 import importlib.util
 import struct
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Event, Thread
-
-finder = importlib.machinery.PathFinder()
-spec = finder.find_spec(
-    'robot_interface',
-    [str(Path(__file__).resolve().parent)]
-)
-if spec is None:
-    raise
-sdk = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(sdk)
+from unitree_sdk2py.core.channel import ChannelSubscriber, ChannelFactoryInitialize
+from unitree_sdk2py.core.channel import ChannelPublisher, ChannelFactoryInitialize
+from unitree_sdk2py.idl.unitree_go.msg.dds_ import WirelessController_
+from unitree_sdk2py.idl.default import unitree_go_msg_dds__LowState_
+from unitree_sdk2py.idl.unitree_go.msg.dds_ import LowState_
+from unitree_sdk2py.idl.default import unitree_go_msg_dds__LowCmd_
+from unitree_sdk2py.idl.unitree_go.msg.dds_ import LowCmd_
+from unitree_sdk2py.utils.crc import CRC
 
 id_to_real_index = {
     'FR_0': 0, 'FR_1': 1, 'FR_2': 2,
@@ -57,6 +56,25 @@ name_to_q0 = {
     'RR_calf_joint': -1.5,
 }
 
+LegID = {
+    "FR_0": 0,  # Front right hip
+    "FR_1": 1,  # Front right thigh
+    "FR_2": 2,  # Front right calf
+    "FL_0": 3,
+    "FL_1": 4,
+    "FL_2": 5,
+    "RR_0": 6,
+    "RR_1": 7,
+    "RR_2": 8,
+    "RL_0": 9,
+    "RL_1": 10,
+    "RL_2": 11,
+}
+
+PosStopF = 2.146e9
+VelStopF = 16000.0
+
+
 num_joints = len(sim_index_to_name)
 
 # sim index to real index mapping is for real-to-sim conversion
@@ -92,104 +110,97 @@ class RobotObservation:
 
 
 class Robot:
-    LOWLEVEL = 0xFF
-
     def __init__(self):
-        self.state = sdk.LowState()
-
         # pybind11 will convert std::array into python list
-        self.motor_state_real = self.state.motorState[:12]  # std::array<MotorState, 20>
-        self.motor_state_sim = [self.motor_state_real[i] for i in sim_idx_to_real_idx]
+        self.motor_state_real = None  # std::array<MotorState, 20>
 
-        self.imu = self.state.imu
+        self.imu = None
+        # self.rc = None
+        self.L1 = False
+        self.L2 = False
+        self.ball_vel = [0, 0, 0, 0]
+
+        self.kp = 10.0
+        self.kd = 1.0
 
         # the struct module does have compiled format cache
         # reuse the Struct object explicitly for clarity, not performance
         self.rocker_struct = struct.Struct('@5f')
 
         self.Δq_real = [float('NaN') for _ in range(12)]
+        self.q_setted = False
+        self.to_damp()
 
         self.stopped = Event()
-        self.background_thread = Thread(target=self._send_recv_loop, daemon=True)
+
+        # ChannelFactoryInitialize(0, "enp7s0")
+        ChannelFactoryInitialize(0)
+        sub = ChannelSubscriber("rt/lowstate", LowState_)
+        sub.Init(self._recv_cb, 10)
+
+        sub1 = ChannelSubscriber("rt/wirelesscontroller", WirelessController_)
+        sub1.Init(self.WirelessControllerHandler, 10)
+
+        pub = ChannelPublisher("rt/lowcmd", LowCmd_)
+        pub.Init()
+        self.pub = pub
+
+        self.crc = CRC()
+
+        self.background_thread = Thread(target=self._send_loop, daemon=True)
         self.background_thread.start()
 
-    def _send_recv_loop(self):
-        # parameter
-        Kp = 20.0
-        Kd = 0.5
+    def WirelessControllerHandler(self,msg: WirelessController_):
+        self.L1 = True if msg.keys == 2 else False
+        self.L2 = True if msg.keys == 32 else False
+        self.ball_vel = [msg.lx, msg.ly, msg.rx, msg.ry]
+        # print(self.ball_vel)
 
-        # shorthand
-        state = self.state
-        stopped = self.stopped
+    def _recv_cb(self, msg: LowState_):
+        # while not self.stopped.wait(0.005):
+        while not self.stopped.wait(0.1):
+            self.motor_state_real = msg.motor_state
+            if self.q_setted == False:
+                for i in range(12):
+                    self.Δq_real[i] = self.motor_state_real[i].q - q0_real[i]
+                self.q_setted = True
+            self.imu = msg.imu_state
+            # self.rc = msg.wireless_remote
+            # for byte in self.rc:
+            #     print(f'{byte:08b}', end=' ')
+            # print()
 
-        # setup
-        udp = sdk.UDP(Robot.LOWLEVEL, 8080, '192.168.123.10', 8007)
-        safe = sdk.Safety(sdk.LeggedType.Go1)
+    def _send_loop(self):
+        # return
+        cmd = unitree_go_msg_dds__LowCmd_()
+        cmd.head[0]=0xFE
+        cmd.head[1]=0xEF
+        cmd.level_flag = 0xFF
+        cmd.gpio = 0
+        for i in range(20):
+            cmd.motor_cmd[i].mode = 0x01  # (PMSM) mode
+            cmd.motor_cmd[i].q= PosStopF
+            cmd.motor_cmd[i].kp = 0
+            cmd.motor_cmd[i].dq = VelStopF
+            cmd.motor_cmd[i].kd = 0
+            cmd.motor_cmd[i].tau = 0
 
-        udp.Send()  # make MCU happy
-        while not stopped.wait(0.005):
-            udp.Recv()
-            udp.GetRecv(state)
-            if state.tick != 0:
-                self.Δq_real = [ms.q - q0 for ms, q0 in zip(state.motorState, q0_real)]
-                break
+        while not self.stopped.wait(0.005):
+            for i in range(12):
+                cmd.motor_cmd[i].mode = 0x01  # (PMSM) mode
+                cmd.motor_cmd[i].q = q0_real[i] + self.Δq_real[i]
+                cmd.motor_cmd[i].dq = 0
+                cmd.motor_cmd[i].kp = self.kp
+                cmd.motor_cmd[i].kd = self.kd
+                cmd.motor_cmd[i].tau = 0
 
-        # === Loop Invariant Code Motion ===
-        cmd = sdk.LowCmd()
-        udp.InitCmdData(cmd)
-        motor_cmd = cmd.motorCmd[:12]
-        # PositionLimit and PowerProtect won't modify dq, Kp, Kd, tau
-        for mc in motor_cmd:
-            mc.dq = 0.0     # expected velocity
-            mc.Kp = Kp      # stiffness
-            mc.Kd = Kd      # damping
-            mc.tau = 0.0    # expected torque
-        # === Loop Invariant Code Motion ===
-
-        # Microbenchmark for torch.Tensor versus builtin.list
-        # for len=12, torch.float32 and builtin.float(f64)
-        # on Go1.NX CPU and Python 3.6.9
-        # copy:
-        #   tolist + copy from list cost ~(1.5+2.3) μs
-        #   directly copy from torch tensor to list cost ~70 μs
-        # permute:
-        #   permute tensor by tensor cost ~11 μs
-        #   permute list by list cost ~2.5 μs (assignment) / ~1.9 μs (comprenhension)
-        # add:
-        #   add tensor by tensor cost ~5.9us
-        #   add list by list cost ~3.1us
-        #
-        # additional observation:
-        #   tensor has a much higher peak latency than list
-        #
-        # conclusion:
-        #   for len=12, use list instead of tensor
-
-        # Microbenchmark for pybind11 STL container automatic conversion performance
-        # NOTE: This automatic conversions involve a copy operation
-        #       that prevents pass-by-reference semantics.
-        #       However, the elements in the container are still passed by reference.
-        # NOTE: state.motorState[i] will first construct a list, then get item from it.
-        #       Thus, [state.motorState[i].q for i in range(12)] will construct the list 12 times.
-        # on Go1.NX CPU and Python 3.6.9
-        # x = [state.motorState[i].q for i in range(12)] cost ~175 μs
-        # x = [ms.q for ms in motor_state] cost ~9 μs
-        # cmd.motorCmd[i].q = qs[i] cost ~185 μs
-        # mc.q = q for mc, q in zip(motor_cmd, qs) cost ~12 μs
-
-        while not stopped.wait(0.005):
-            for mc, q0, Δq in zip(motor_cmd, q0_real, self.Δq_real):
-                mc.q = q0 + Δq  # expected position
-            safe.PositionLimit(cmd)
-            udp.Recv()
-            udp.GetRecv(state)
-            safe.PowerProtect(cmd, state, 5)
-            udp.SetSend(cmd)
-            udp.Send()
+            cmd.crc = self.crc.Crc(cmd)
+            self.pub.Write(cmd)
+            
 
     def get_obs(self):
         # shorthand
-        motor_state_sim = self.motor_state_sim
+        motor_state_sim = [self.motor_state_real[i] for i in sim_idx_to_real_idx]
 
         joint_position = [ms.q - q0 for ms, q0 in zip(motor_state_sim, q0_sim)]
         joint_velocity = [ms.dq for ms in motor_state_sim]
@@ -202,16 +213,21 @@ class Robot:
         quaternion = imu.quaternion     # (w, x, y, z) order, normalized
         roll, pitch, yaw = imu.rpy      # rpy order, rad
 
-        rc = self.state.wirelessRemote  # std::array<uint8_t, 40> => list[int]
+        # rc = self.rc  # std::array<uint8_t, 40> => list[int]
         # stdlib struct.unpack is faster than convert tensor then .view(torch.float32)
         # and torch<=1.10 only support .view to dtype with same size
-        lx, rx, ry, _, ly = self.rocker_struct.unpack(bytes(rc[4:24]))
+        # lx, rx, ry, _, ly = self.rocker_struct.unpack(bytes(rc[4:24]))
+        # print(lx, rx, ry, ly)
+        lx,ly,rx,ry = self.ball_vel
 
         # LSB -> MSB
         # rc[2] = [R1, L1, start, select][R2, L2, F1, F2]
         # rc[3] = [A, B, X, Y][up, right, down, left]
-        button_L1 = rc[2] & 0b0000_0010
-        button_L2 = rc[2] & 0b0010_0000
+        # button_L1 = rc[2] & 0b0000_0010
+        # button_L2 = rc[2] & 0b0010_0000
+        # for byte in rc:
+        #     print(f'{byte:08b}', end=' ')
+        # print("button_L1: ", button_L1, "button_L2: ", button_L2)
 
         return RobotObservation(
             joint_position=joint_position,  # in sim order, relative to q0
@@ -225,11 +241,12 @@ class Robot:
             ly=ly,
             rx=rx,
             ry=ry,
-            L1=bool(button_L1),
-            L2=bool(button_L2),
+            L1=self.L1,
+            L2=self.L2,
         )
 
     def set_act(self, action: 'list[float]'):
+        # print(action)
         self.Δq_real = [action[i] for i in real_idx_to_sim_idx]
 
     def init(self):
@@ -250,3 +267,26 @@ class Robot:
             # 0.05 sec per step
             if stopped.wait(0.05):
                 break
+
+    def to_damp(self):
+        # motorCmd.q = 0
+        # motorCmd.dq = 0
+        # motorCmd.Kp = 0
+        # motorCmd.Kd = 2.0
+        # motorCmd.tau = 0
+        # self.Δq_real = [-q for q in q0_real]
+        self.kp = 0.0
+        self.kd = 10.0
+        # self.q_setted = True
+    
+    def to_stand(self):
+        # motorCmd.q = q_stand
+        # motorCmd.dq = 0
+        # motorCmd.Kp = kp * pd_ratio
+        # motorCmd.Kd = kd * pd_ratio
+        # motorCmd.tau = 0
+        self.Δq_real = [0.0 for _ in range(12)]
+        # self.kp = 40.0
+        # self.kd = 7.5
+        self.kp = 30.0
+        self.kd = 5.0

@@ -2,7 +2,7 @@ import math
 from pathlib import Path
 
 import torch
-import zmq
+# import zmq
 
 from math_utils import project_gravity, wrap_to_pi
 from robot import Robot, RobotObservation
@@ -10,6 +10,7 @@ from robot import Robot, RobotObservation
 
 class BallDetector:
     def __init__(self):
+        return
         ctx: 'zmq.Context[zmq.Socket]' = zmq.Context.instance()
         self.socket = sock = ctx.socket(zmq.DEALER)
         sock.set(zmq.CONFLATE, 1)
@@ -17,6 +18,7 @@ class BallDetector:
         self.box_corner = None
 
     def refresh(self):
+        return
         try:
             score, box_corner = self.socket.recv_pyobj(flags=zmq.NOBLOCK)
         except zmq.error.Again:
@@ -25,6 +27,7 @@ class BallDetector:
         self.box_corner = box_corner if score > 0.7 else None
 
     def get_ball_pos(self):
+        return [0.2, 0.0, 0.0]
         if self.box_corner is None:
             return [0.2, 0.0, 0.0]
         x0, y0, x1, y1 = self.box_corner
@@ -54,8 +57,10 @@ class BallDetector:
 
 
 def load_policy(root: Path):
-    body = torch.jit.load(root / 'body.jit', map_location='cpu')
-    adaptation_module = torch.jit.load(root / 'adaptation_module.jit', map_location='cpu')
+    body = torch.jit.load("/home/unitree_go2/robo_soccer/tmp/legged_data/body_28400.jit", map_location='cpu')
+    adaptation_module = torch.jit.load("/home/unitree_go2/robo_soccer/tmp/legged_data/adaptation_module_28400.jit", map_location='cpu')
+    # body = torch.jit.load(root / 'body.jit', map_location='cpu')
+    # adaptation_module = torch.jit.load(root / 'adaptation_module.jit', map_location='cpu')
 
     @torch.no_grad()
     def policy(stacked_history: torch.Tensor):
@@ -193,6 +198,7 @@ def main():
     env = DribbleEnv(history_len=15, robot=robot, ball_detector=ball_detector)
 
     robot.init()
+    print('Robot initialized, press L1 to start')
     while True:
         obs, robot_obs = env.observe()
         env.advance(torch.zeros(12, dtype=torch.float32))
@@ -200,6 +206,9 @@ def main():
             break
         time.sleep(0.02)
 
+    robot.to_stand()
+    time.sleep(1)
+    print('Robot started, press L2 to stop')
     env.yaw_init = robot_obs.yaw
 
     while True:
@@ -214,6 +223,7 @@ def main():
 
     robot.stopped.set()
     robot.background_thread.join()
+    robot.to_damp()
 
 
 if __name__ == '__main__':
