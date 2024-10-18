@@ -14,14 +14,9 @@ from unitree_sdk2py.idl.default import unitree_go_msg_dds__LowCmd_
 from unitree_sdk2py.idl.unitree_go.msg.dds_ import LowCmd_
 from unitree_sdk2py.utils.crc import CRC
 
-try:
-    import rclpy
-    from rclpy.node import Node
-    from std_msgs.msg import Float32MultiArray
-    ROS2_AVAILABLE = True
-except ImportError:
-    Node = object
-    ROS2_AVAILABLE = False
+import rclpy
+from rclpy.node import Node
+from std_msgs.msg import Float32MultiArray
 
 id_to_real_index = {
     'FR_0': 0, 'FR_1': 1, 'FR_2': 2,
@@ -120,8 +115,7 @@ class RobotObservation:
 
 class Robot(Node):
     def __init__(self):
-        if ROS2_AVAILABLE:
-            super().__init__('robot_node')
+        super().__init__('robot_node')
         # pybind11 will convert std::array into python list
         self.motor_state_real = None  # std::array<MotorState, 20>
 
@@ -161,16 +155,14 @@ class Robot(Node):
         self.background_thread = Thread(target=self._send_loop, daemon=True)
         self.background_thread.start()
 
-        if ROS2_AVAILABLE:
-            self.publisher_ = self.create_publisher(Float32MultiArray, 'ball_position', 10)
+        self.publisher_ = self.create_publisher(Float32MultiArray, 'ball_position', 10)
 
     def WirelessControllerHandler(self,msg: WirelessController_):
         self.L1 = True if msg.keys == 2 else False
         self.L2 = True if msg.keys == 32 else False
         self.ball_vel = [msg.lx, msg.ly, msg.rx, msg.ry]
         # print(self.ball_vel)
-        if ROS2_AVAILABLE:
-            self.publish_ball_speed()
+        self.publish_ball_speed()
 
     def _recv_cb(self, msg: LowState_):
         # while not self.stopped.wait(0.005):

@@ -2,58 +2,12 @@ import math
 from pathlib import Path
 
 import torch
-# import zmq
+import rclpy
+from rclpy.node import Node
+from std_msgs.msg import Float32MultiArray
 
 from math_utils import project_gravity, wrap_to_pi
 from robot import Robot, RobotObservation
-
-
-class BallDetector:
-    def __init__(self):
-        return
-        ctx: 'zmq.Context[zmq.Socket]' = zmq.Context.instance()
-        self.socket = sock = ctx.socket(zmq.DEALER)
-        sock.set(zmq.CONFLATE, 1)
-        sock.bind('tcp://127.0.0.1:5555')
-        self.box_corner = None
-
-    def refresh(self):
-        return
-        try:
-            score, box_corner = self.socket.recv_pyobj(flags=zmq.NOBLOCK)
-        except zmq.error.Again:
-            return
-
-        self.box_corner = box_corner if score > 0.7 else None
-
-    def get_ball_pos(self):
-        return [0.2, 0.0, 0.0]
-        if self.box_corner is None:
-            return [0.2, 0.0, 0.0]
-        x0, y0, x1, y1 = self.box_corner
-        image_width = 480
-        offset_from_center = (x0 + x1) / 2 - image_width / 2
-        # the line y = 0 (the x-axis) has offset_from_center ≈ -40
-        offset_from_x_axis = offset_from_center + 40
-
-        w = x1 - x0
-        h = y1 - y0
-        size = math.sqrt(w * h)
-
-        # ball at 1m distance has size 20px
-        r = 20 / size
-
-        # the positive direction of offset points to the right
-        # the positive direction of θ is counter-clockwise
-        # the ray θ = 0 points forward
-
-        θ = -math.radians(0.4 * offset_from_x_axis)  # 0.4° per pixel
-
-        # right-handed coordinate system
-        # the positive x-axis points forward
-        # the positive y-axis points to the left
-        # the positive z-axis points up
-        return [r * math.cos(θ), r * math.sin(θ), 0.0]
 
 
 def load_policy(root: Path):
@@ -100,7 +54,7 @@ class DribbleEnv(RealtimeEnv):
     action_scale = 0.25
     hip_scale_reduction = torch.tensor([0.5, 1, 1] * 4, dtype=torch.float32)
 
-    def __init__(self, history_len: int, robot: Robot, ball_detector: BallDetector):
+    def __init__(self, history_len: int, robot: Robot):
         assert history_len > 0
 
         self.history_len = history_len
@@ -115,10 +69,11 @@ class DribbleEnv(RealtimeEnv):
         self.yaw_init = 0.0
 
         self.robot = robot
-        self.ball_detector = ball_detector
+
+        self.ball_position = [0.0, 0.0, 0.0]
+        self.ball_subscriber = BallSubscriber(self)
 
     def observe(self):
-        self.ball_detector.refresh()
         robot_obs = self.robot.get_obs()
         obs = self.make_obs(robot_obs)
         self.store_obs(obs)
@@ -141,7 +96,7 @@ class DribbleEnv(RealtimeEnv):
         self.t = t + 1
 
     def make_obs(self, robot_obs: RobotObservation) -> torch.Tensor:
-        ball_pos = self.ball_detector.get_ball_pos()
+        ball_pos = self.ball_position
         projected_gravity = project_gravity(robot_obs.quaternion)
         commands = [
             # rocker x: left/right
@@ -190,12 +145,29 @@ class DribbleEnv(RealtimeEnv):
         ]
 
 
+class BallSubscriber(Node):
+    def __init__(self, env: DribbleEnv):
+        super().__init__('ball_subscriber')
+        self.env = env
+        self.subscription = self.create_subscription(
+            Float32MultiArray,
+            'ball_position',
+            self.listener_callback,
+            10)
+        self.subscription  # prevent unused variable warning
+
+    def listener_callback(self, msg):
+        self.env.ball_position = msg.data
+
+
 def main():
     import time
     policy = load_policy(Path(__file__).resolve().parent)
     robot = Robot()
-    ball_detector = BallDetector()
-    env = DribbleEnv(history_len=15, robot=robot, ball_detector=ball_detector)
+    env = DribbleEnv(history_len=15, robot=robot)
+
+    rclpy.init()
+    rclpy.spin(env.ball_subscriber)
 
     robot.init()
     print('Robot initialized, press L1 to start')
@@ -224,6 +196,7 @@ def main():
     robot.stopped.set()
     robot.background_thread.join()
     robot.to_damp()
+    rclpy.shutdown()
 
 
 if __name__ == '__main__':
