@@ -31,7 +31,7 @@ class FisheyeCameraNode(Node):
             self.get_logger().info("Camera opened successfully")
 
         # 读取鱼眼相机的内参矩阵 K 和畸变参数
-        with open('/home/hgd/data/calibration_1009/calibration_params.pickle', 'rb') as f:
+        with open('./calibration_params.pickle', 'rb') as f:
             calibration_params = pickle.load(f)
         self.K = calibration_params['K']
         self.D = calibration_params['D']
