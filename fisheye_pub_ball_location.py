@@ -104,10 +104,12 @@ class FisheyeCameraNode(Node):
                 x_normal = x_dis / focal_length
                 y_normal = y_dis / focal_length
 
-
+                #球心与图像中心距离r
                 r = np.sqrt(x_dis**2 + y_dis**2)
 
+                # theta = r / f
                 angle_theta = r / focal_length
+                
                 angle_phi = np.arctan2(y_normal, x_normal)
 
                 # 转换为相机坐标系下的3D坐标
