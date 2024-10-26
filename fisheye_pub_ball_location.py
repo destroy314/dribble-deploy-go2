@@ -1,6 +1,6 @@
 import rclpy
 from rclpy.node import Node
-from std_msgs.msg import String
+from std_msgs.msg import String, Float32MultiArray
 import cv2
 import numpy as np
 import pickle
@@ -10,7 +10,7 @@ class FisheyeCameraNode(Node):
         super().__init__('fisheye_camera_node')
         
         # 发布相机和世界坐标的话题
-        self.publisher_ = self.create_publisher(String, 'ball_position', 10)
+        self.publisher_ = self.create_publisher(Float32MultiArray, 'ball_position', 10)
         
         # 订阅外参的节点, 例如: 外参消息定义为 R 和 t
         self.subscription = self.create_subscription(
@@ -20,11 +20,13 @@ class FisheyeCameraNode(Node):
             10)
 
         # 打开相机
-        pipeline = (
-            "v4l2src device=/dev/video3 ! "
-            "videoconvert ! appsink"
-        )
-        self.capture = cv2.VideoCapture(pipeline, cv2.CAP_GSTREAMER)
+        # pipeline = (
+        #     "v4l2src device=/dev/video1 ! "
+        #     "videoconvert ! appsink"
+        # )
+        pipeline = "/dev/video0"
+        # self.capture = cv2.VideoCapture(pipeline, cv2.CAP_GSTREAMER)
+        self.capture = cv2.VideoCapture(pipeline)
         if not self.capture.isOpened():
             self.get_logger().error("Failed to open camera")
         else:
@@ -85,7 +87,7 @@ class FisheyeCameraNode(Node):
         mask = cv2.inRange(hsv_image, lower_green, upper_green)
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-        known_diameter = 0.22  # 物体的已知直径（米）
+        known_diameter = 0.18  # 物体的已知直径（米）
 
         if contours:
             max_contour = max(contours, key=cv2.contourArea)
@@ -109,6 +111,7 @@ class FisheyeCameraNode(Node):
 
                 # theta = r / f
                 angle_theta = r / focal_length
+                angle_theta = np.clip(angle_theta,0,np.pi/2)
                 
                 angle_phi = np.arctan2(y_normal, x_normal)
 
@@ -128,19 +131,21 @@ class FisheyeCameraNode(Node):
                     f"Distance: {distance:.2f}m, Angles (Theta, Phi): ({np.degrees(angle_theta):.2f}°, {np.degrees(angle_phi):.2f}°)"
                 )
 
-                self.publisher_.publish(String(data=output_message))
+                self.publisher_.publish(Float32MultiArray(data=[-5*Y_cam,-5*X_cam,0.0]))
                 self.get_logger().info(output_message)
 
                 # 在图像上绘制
-                cv2.rectangle(image, (x, y), (x + w, y + h), (0, 255, 0), 2)
-                cv2.circle(image, (cx, cy), 5, (255, 0, 0), -1)
+                # cv2.rectangle(image, (x, y), (x + w, y + h), (0, 255, 0), 2)
+                # cv2.circle(image, (cx, cy), 5, (255, 0, 0), -1)
             else:
                 self.get_logger().info("Object too small or too distant.")
+                self.publisher_.publish(Float32MultiArray(data=[0.2,0.0,0.0]))
         else:
             self.get_logger().info("No object detected")
+            self.publisher_.publish(Float32MultiArray(data=[0.2,0.0,0.0]))
 
-        cv2.imshow("Camera Output", image)
-        cv2.waitKey(1)
+        # cv2.imshow("Camera Output", image)
+        # cv2.waitKey(1)
 
     def __del__(self):
         self.capture.release()

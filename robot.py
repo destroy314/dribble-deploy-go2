@@ -138,7 +138,7 @@ class Robot(Node):
 
         self.stopped = Event()
 
-        # ChannelFactoryInitialize(0, "enp7s0")
+        # ChannelFactoryInitialize(0, "eth0")
         ChannelFactoryInitialize(0)
         sub = ChannelSubscriber("rt/lowstate", LowState_)
         sub.Init(self._recv_cb, 10)
@@ -155,7 +155,7 @@ class Robot(Node):
         self.background_thread = Thread(target=self._send_loop, daemon=True)
         self.background_thread.start()
 
-        self.publisher_ = self.create_publisher(Float32MultiArray, 'ball_position', 10)
+        self.publisher_ = self.create_publisher(Float32MultiArray, 'ball_velocity', 10)
 
     def WirelessControllerHandler(self,msg: WirelessController_):
         self.L1 = True if msg.keys == 2 else False
