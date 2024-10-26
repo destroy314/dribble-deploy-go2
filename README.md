@@ -25,7 +25,7 @@ Press L1 on the remote control, the robot will stand up, press L1 again the drib
 
 ```bash
 export ROS_DOMAIN_ID=1
-python visualize.py
+python3 visualize.py
 ```
 
 ### References
