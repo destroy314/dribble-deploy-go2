@@ -125,8 +125,8 @@ class Robot(Node):
         self.L2 = False
         self.ball_vel = [0, 0, 0, 0]
 
-        self.kp = 10.0
-        self.kd = 1.0
+        self.kp = 20.0
+        self.kd = 0.5
 
         # the struct module does have compiled format cache
         # reuse the Struct object explicitly for clarity, not performance
@@ -188,8 +188,8 @@ class Robot(Node):
         for i in range(20):
             cmd.motor_cmd[i].mode = 0x01  # (PMSM) mode
             cmd.motor_cmd[i].q= PosStopF
-            cmd.motor_cmd[i].kp = 0
             cmd.motor_cmd[i].dq = VelStopF
+            cmd.motor_cmd[i].kp = 0
             cmd.motor_cmd[i].kd = 0
             cmd.motor_cmd[i].tau = 0
 
@@ -298,6 +298,10 @@ class Robot(Node):
         # self.kd = 7.5
         self.kp = 30.0
         self.kd = 5.0
+
+    def to_relax(self):
+        self.kp = 0.0
+        self.kd = 0.0
 
     def publish_ball_speed(self):
         msg = Float32MultiArray()

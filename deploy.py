@@ -207,6 +207,8 @@ def main():
     robot.stopped.set()
     robot.background_thread.join()
     robot.to_damp()
+    time.sleep(2)
+    robot.to_relax()
     rclpy.shutdown()
 
 
