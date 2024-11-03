@@ -8,43 +8,43 @@ from rclpy.node import Node
 from std_msgs.msg import Float32MultiArray
 from threading import Thread
 
-from math_utils import project_gravity, wrap_to_pi
+from utils.math_utils import project_gravity, wrap_to_pi
 from robot import Robot, RobotObservation
 
 dof_map = [ # from isaacgym simulation joint order to real robot joint order
-            3, 4, 5,
-            0, 1, 2,
-            9, 10, 11,
-            6, 7, 8,
-        ]
+    3, 4, 5,
+    0, 1, 2,
+    9, 10, 11,
+    6, 7, 8,
+]
 clip_actions_high=[
-            1.494,
-            3.932,
-            0.9260000000000002,
-            1.894,
-            3.932,
-            0.9260000000000002,
-            1.494,
-            3.532,
-            0.9260000000000002,
-            1.894,
-            3.532,
-            0.9260000000000002
-        ]
+    1.494,
+    3.932,
+    0.9260000000000002,
+    1.894,
+    3.932,
+    0.9260000000000002,
+    1.494,
+    3.532,
+    0.9260000000000002,
+    1.894,
+    3.532,
+    0.9260000000000002
+]
 clip_actions_low= [
-            -1.894,
-            -2.5260000000000002,
-            -2.042,
-            -1.494,
-            -2.5260000000000002,
-            -2.042,
-            -1.894,
-            -2.926,
-            -2.042,
-            -1.494,
-            -2.926,
-            -2.042
-        ]
+    -1.894,
+    -2.5260000000000002,
+    -2.042,
+    -1.494,
+    -2.5260000000000002,
+    -2.042,
+    -1.894,
+    -2.926,
+    -2.042,
+    -1.494,
+    -2.926,
+    -2.042
+]
 th_clip_actions_high = []
 th_clip_actions_low = []
 for i in range(12):
@@ -54,10 +54,8 @@ th_clip_actions_high = torch.tensor(th_clip_actions_high,device="cuda:0")
 th_clip_actions_low = torch.tensor(th_clip_actions_low,device="cuda:0")
 
 def load_policy(root: Path):
-    body = torch.jit.load("/home/unitree/dribble-deploy-go2/body_56000.jit", map_location='cuda:0')
-    adaptation_module = torch.jit.load("/home/unitree/dribble-deploy-go2/adaptation_module_56000.jit", map_location='cuda:0')
-    # body = torch.jit.load(root / 'body.jit', map_location='cpu')
-    # adaptation_module = torch.jit.load(root / 'adaptation_module.jit', map_location='cpu')
+    body = torch.jit.load("/home/unitree/dribble-deploy-go2/body.jit", map_location='cuda:0')
+    adaptation_module = torch.jit.load("/home/unitree/dribble-deploy-go2/adaptation_module.jit", map_location='cuda:0')
 
     @torch.no_grad()
     def policy(stacked_history: torch.Tensor):
@@ -71,12 +69,7 @@ def load_policy(root: Path):
     return policy
 
 
-class RealtimeEnv:
-    def observe(self): ...
-    def advance(self, action): ...
-
-
-class DribbleEnv(RealtimeEnv):
+class DribbleEnv():
     obs_dim = 75
     act_dim = 12
 
@@ -217,33 +210,6 @@ def main():
     thread = Thread(target=rclpy.spin, args=(env.ball_subscriber,))
     thread.start()
 
-    # robot.to_relax()
-    # print('Robot relaxed, press L2 to quit')
-    # while True:
-    #     obs, robot_obs = env.observe()
-    #     if robot_obs.L2:
-    #         break
-    # robot.stopped.set()
-    # robot.background_thread.join()
-    # rclpy.shutdown()
-    # exit()
-    # while True:
-    #     begin = time.perf_counter()
-    #     obs, robot_obs = env.observe()
-    #     # breakpoint()
-    #     action = policy(obs.to("cuda:0"))
-    #     # env.advance(torch.zeros(12, dtype=torch.float32,device="cuda:0"))
-    #     if robot_obs.L1:
-    #         break
-    #     end = time.perf_counter()
-    #     # print("sleep",max(0, begin + 0.02 - end))
-    #     time.sleep(max(0, begin + 0.02 - end))
-    # robot.stopped.set()
-    # robot.background_thread.join()
-    # robot.to_damp()
-    # rclpy.shutdown()
-    # exit()
-
     print('Robot initialized, press L1 to stand')
     while True:
         obs, robot_obs = env.observe()
@@ -263,11 +229,10 @@ def main():
         time.sleep(env.dt)
     print('Robot started, press L2 to stop')
     env.yaw_init = robot_obs.yaw
-    # breakpoint()
     env.buffer[:,73]=0.0
 
     robot.to_run()
-    i=0
+    i = 0
     while True:
         begin = time.perf_counter()
         obs, robot_obs = env.observe()
@@ -275,7 +240,7 @@ def main():
             save_observation_to_file(obs[14], mode="w")
         else:
             save_observation_to_file(obs[14], mode="a")
-        i+=1
+        i += 1
         action = policy(obs.to("cuda:0"))
         env.advance(action)
         if robot_obs.L2:
