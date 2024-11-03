@@ -7,7 +7,7 @@
 
 ### Start and stop running
 
-Modify model path at deploy.py#L16, turn off the motion service, make dog prone, then:
+Modify model path at deploy.py#L16, turn off the sport_mode service, make dog prone, then:
 
 ```bash
 export ROS_DOMAIN_ID=1

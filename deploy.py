@@ -11,10 +11,51 @@ from threading import Thread
 from math_utils import project_gravity, wrap_to_pi
 from robot import Robot, RobotObservation
 
+dof_map = [ # from isaacgym simulation joint order to real robot joint order
+            3, 4, 5,
+            0, 1, 2,
+            9, 10, 11,
+            6, 7, 8,
+        ]
+clip_actions_high=[
+            1.494,
+            3.932,
+            0.9260000000000002,
+            1.894,
+            3.932,
+            0.9260000000000002,
+            1.494,
+            3.532,
+            0.9260000000000002,
+            1.894,
+            3.532,
+            0.9260000000000002
+        ]
+clip_actions_low= [
+            -1.894,
+            -2.5260000000000002,
+            -2.042,
+            -1.494,
+            -2.5260000000000002,
+            -2.042,
+            -1.894,
+            -2.926,
+            -2.042,
+            -1.494,
+            -2.926,
+            -2.042
+        ]
+th_clip_actions_high = []
+th_clip_actions_low = []
+for i in range(12):
+    th_clip_actions_high.append(clip_actions_high[dof_map[i]])
+    th_clip_actions_low.append(clip_actions_low[dof_map[i]])
+th_clip_actions_high = torch.tensor(th_clip_actions_high,device="cuda:0")
+th_clip_actions_low = torch.tensor(th_clip_actions_low,device="cuda:0")
 
 def load_policy(root: Path):
-    body = torch.jit.load("/home/unitree/dribble-deploy-go2/body.jit", map_location='cuda:0')
-    adaptation_module = torch.jit.load("/home/unitree/dribble-deploy-go2/adaptation_module.jit", map_location='cuda:0')
+    body = torch.jit.load("/home/unitree/dribble-deploy-go2/body_56000.jit", map_location='cuda:0')
+    adaptation_module = torch.jit.load("/home/unitree/dribble-deploy-go2/adaptation_module_56000.jit", map_location='cuda:0')
     # body = torch.jit.load(root / 'body.jit', map_location='cpu')
     # adaptation_module = torch.jit.load(root / 'adaptation_module.jit', map_location='cpu')
 
@@ -72,7 +113,7 @@ class DribbleEnv(RealtimeEnv):
 
         self.robot = robot
 
-        self.ball_position = [0.2, 0.0, 0.0]
+        self.ball_position = [0.27402842, -0.04910268 , 0.0]
         self.ball_subscriber = BallSubscriber(self)
 
     def observe(self):
@@ -81,14 +122,6 @@ class DribbleEnv(RealtimeEnv):
         self.store_obs(obs)
         return self.buffer[self.t - self.history_len:self.t], robot_obs
 
-    def advance(self, action: torch.Tensor):
-        self.action_t_minus1[:] = self.action_t
-        self.action_t[:] = action
-
-        action_scaled = action * self.action_scale * self.hip_scale_reduction
-        self.robot.set_act(action_scaled.tolist())
-        self.gait_index = (self.gait_index + self.step_frequency * self.dt) % 1
-
     def store_obs(self, obs: torch.Tensor):
         h, buffer, t = self.history_len, self.buffer, self.t
         if t == buffer.shape[0]:
@@ -96,6 +129,17 @@ class DribbleEnv(RealtimeEnv):
             t = h
         buffer[t] = obs
         self.t = t + 1
+
+    def advance(self, action: torch.Tensor):
+        self.action_t_minus1[:] = self.action_t
+        self.action_t[:] = action
+
+        action_clipped = torch.clip(action, th_clip_actions_low, th_clip_actions_high)
+        # if not torch.allclose(action, action_clipped, atol=0.01):
+        #     print("action clipped")
+        action_scaled = action_clipped * self.action_scale * self.hip_scale_reduction
+        self.robot.set_act(action_scaled.tolist())
+        self.gait_index = (self.gait_index + self.step_frequency * self.dt) % 1
 
     def make_obs(self, robot_obs: RobotObservation) -> torch.Tensor:
         ball_pos = torch.tensor(self.ball_position,device="cuda:0")
@@ -173,14 +217,40 @@ def main():
     thread = Thread(target=rclpy.spin, args=(env.ball_subscriber,))
     thread.start()
 
-    robot.init()
+    # robot.to_relax()
+    # print('Robot relaxed, press L2 to quit')
+    # while True:
+    #     obs, robot_obs = env.observe()
+    #     if robot_obs.L2:
+    #         break
+    # robot.stopped.set()
+    # robot.background_thread.join()
+    # rclpy.shutdown()
+    # exit()
+    # while True:
+    #     begin = time.perf_counter()
+    #     obs, robot_obs = env.observe()
+    #     # breakpoint()
+    #     action = policy(obs.to("cuda:0"))
+    #     # env.advance(torch.zeros(12, dtype=torch.float32,device="cuda:0"))
+    #     if robot_obs.L1:
+    #         break
+    #     end = time.perf_counter()
+    #     # print("sleep",max(0, begin + 0.02 - end))
+    #     time.sleep(max(0, begin + 0.02 - end))
+    # robot.stopped.set()
+    # robot.background_thread.join()
+    # robot.to_damp()
+    # rclpy.shutdown()
+    # exit()
+
     print('Robot initialized, press L1 to stand')
     while True:
         obs, robot_obs = env.observe()
         env.advance(torch.zeros(12, dtype=torch.float32,device="cuda:0"))
         if robot_obs.L1:
             break
-        time.sleep(0.02)
+        time.sleep(env.dt)
 
     robot.to_stand()
     time.sleep(1)
@@ -190,27 +260,60 @@ def main():
         env.advance(torch.zeros(12, dtype=torch.float32,device="cuda:0"))
         if robot_obs.L1:
             break
-        time.sleep(0.02)
+        time.sleep(env.dt)
     print('Robot started, press L2 to stop')
     env.yaw_init = robot_obs.yaw
+    # breakpoint()
+    env.buffer[:,73]=0.0
 
+    robot.to_run()
+    i=0
     while True:
         begin = time.perf_counter()
         obs, robot_obs = env.observe()
+        if i == 0:
+            save_observation_to_file(obs[14], mode="w")
+        else:
+            save_observation_to_file(obs[14], mode="a")
+        i+=1
         action = policy(obs.to("cuda:0"))
         env.advance(action)
         if robot_obs.L2:
             break
         end = time.perf_counter()
-        time.sleep(max(0, begin + 0.02 - end))
+        time.sleep(max(0, begin + env.dt - end))
 
+    robot.to_damp()
+    time.sleep(1)
+    robot.to_relax()
+    print('Robot relaxed, press L2 to quit')
+    while True:
+        obs, robot_obs = env.observe()
+        if robot_obs.L2:
+            break
     robot.stopped.set()
     robot.background_thread.join()
-    robot.to_damp()
-    time.sleep(2)
-    robot.to_relax()
     rclpy.shutdown()
 
+def save_observation_to_file(obs, filename="observation_output.txt", mode="a"):
+    obs = obs.cpu().numpy()
+    sensor_info = {
+        "ObjectSensor": obs[0:3],
+        "OrientationSensor": obs[3:6],
+        "RCSensor": obs[6:21],
+        "JointPositionSensor": obs[21:33],
+        "JointVelocitySensor": obs[33:45],
+        "ActionSensor": obs[45:57],
+        "ActionSensor_last": obs[57:69],
+        "ClockSensor": obs[69:73],
+        "YawSensor": obs[73:74],
+        "TimingSensor": obs[74:75]
+    }
+
+    with open(filename, mode) as file:
+        for sensor_name, sensor_values in sensor_info.items():
+            file.write(f"{sensor_name}: {sensor_values}\n")
+        file.write("-" * 40 + "\n")
 
 if __name__ == '__main__':
     main()

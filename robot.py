@@ -132,7 +132,7 @@ class Robot(Node):
         # reuse the Struct object explicitly for clarity, not performance
         self.rocker_struct = struct.Struct('@5f')
 
-        self.Δq_real = [float('NaN') for _ in range(12)]
+        self.Δq_real = [None for _ in range(12)]
         self.q_setted = False
         self.to_damp()
 
@@ -152,6 +152,8 @@ class Robot(Node):
 
         self.crc = CRC()
 
+        while not self.q_setted:
+            time.sleep(0.01)
         self.background_thread = Thread(target=self._send_loop, daemon=True)
         self.background_thread.start()
 
@@ -165,18 +167,16 @@ class Robot(Node):
         self.publish_ball_speed()
 
     def _recv_cb(self, msg: LowState_):
-        # while not self.stopped.wait(0.005):
-        while not self.stopped.wait(0.1):
-            self.motor_state_real = msg.motor_state
-            if self.q_setted == False:
-                for i in range(12):
-                    self.Δq_real[i] = self.motor_state_real[i].q - q0_real[i]
-                self.q_setted = True
-            self.imu = msg.imu_state
-            # self.rc = msg.wireless_remote
-            # for byte in self.rc:
-            #     print(f'{byte:08b}', end=' ')
-            # print()
+        self.motor_state_real = msg.motor_state
+        if self.q_setted == False:
+            for i in range(12):
+                self.Δq_real[i] = self.motor_state_real[i].q - q0_real[i]
+            self.q_setted = True
+        self.imu = msg.imu_state
+        # self.rc = msg.wireless_remote
+        # for byte in self.rc:
+        #     print(f'{byte:08b}', end=' ')
+        # print()
 
     def _send_loop(self):
         # return
@@ -257,7 +257,7 @@ class Robot(Node):
         # print(action)
         self.Δq_real = [action[i] for i in real_idx_to_sim_idx]
 
-    def init(self):
+    def slowly_stand_up(self):
         import math
         stopped = self.stopped
         while any(math.isnan(Δq) for Δq in self.Δq_real) and not stopped.wait(0.05):
@@ -294,10 +294,14 @@ class Robot(Node):
         # motorCmd.Kd = kd * pd_ratio
         # motorCmd.tau = 0
         self.Δq_real = [0.0 for _ in range(12)]
-        # self.kp = 40.0
-        # self.kd = 7.5
         self.kp = 30.0
         self.kd = 5.0
+        # self.kp = 20.0
+        # self.kd = 0.5
+
+    def to_run(self):
+        self.kp = 20.0
+        self.kd = 0.5
 
     def to_relax(self):
         self.kp = 0.0
