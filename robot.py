@@ -93,7 +93,9 @@ name_to_q0 = {
 num_joints = len(sim_index_to_name)
 
 # sim index to real index mapping is for real-to-sim conversion
-sim_idx_to_real_idx = [id_to_real_index[name_to_id[name]] for name in sim_index_to_name]  # [3, 4, 5, 0, 1, 2, 9, 10, 11, 6, 7, 8]
+sim_idx_to_real_idx = [
+    id_to_real_index[name_to_id[name]] for name in sim_index_to_name
+]  # [3, 4, 5, 0, 1, 2, 9, 10, 11, 6, 7, 8]
 
 # real index to sim index mapping is for sim-to-real conversion
 # even if dict is ordered in Python 3.7 or later, it is not sorted by its key
@@ -101,13 +103,14 @@ sim_idx_to_real_idx = [id_to_real_index[name_to_id[name]] for name in sim_index_
 # instead of `for id in real_index_to_id.values()`
 real_idx_to_sim_idx = [
     name_to_sim_index[id_to_name[real_index_to_id[i]]] for i in range(num_joints)
-]   # [3, 4, 5, 0, 1, 2, 9, 10, 11, 6, 7, 8]
+]  # [3, 4, 5, 0, 1, 2, 9, 10, 11, 6, 7, 8]
 
 q0_sim = [name_to_q0[name] for name in sim_index_to_name]
 q0_real = [name_to_q0[id_to_name[real_index_to_id[i]]] for i in range(num_joints)]
 
 PosStopF = 2.146e9
 VelStopF = 16000.0
+
 
 @dataclass
 class RobotObservation:
@@ -136,14 +139,10 @@ class Robot(Node):
         # self.rc = None
         self.L1 = False
         self.L2 = False
-        self.ball_vel = [0, 0, 0, 0]
+        self.cmd_ball_vel = [0, 0, 0, 0]
 
         self.kp = 20.0
         self.kd = 0.5
-
-        # the struct module does have compiled format cache
-        # reuse the Struct object explicitly for clarity, not performance
-        self.rocker_struct = struct.Struct("@5f")
 
         self.Δq_real = [None for _ in range(12)]  # in real order
         self.q_setted = False
@@ -151,48 +150,51 @@ class Robot(Node):
 
         self.stopped = Event()
 
-        self.publisher_ = self.create_publisher(Float32MultiArray, "ball_velocity", 10)
+        self.ball_vel_publisher_ = self.create_publisher(
+            Float32MultiArray, "ball_velocity", 10
+        )
 
         # ChannelFactoryInitialize(0, "eth0")
         ChannelFactoryInitialize(0)
-        sub = ChannelSubscriber("rt/lowstate", LowState_)
-        sub.Init(self._recv_cb, 10)
+        _lowstate_sub = ChannelSubscriber("rt/lowstate", LowState_)
+        _lowstate_sub.Init(self._lowstate_cb, 10)
 
-        sub1 = ChannelSubscriber("rt/wirelesscontroller", WirelessController_)
-        sub1.Init(self.WirelessControllerHandler, 10)
+        _rc_sub = ChannelSubscriber("rt/wirelesscontroller", WirelessController_)
+        _rc_sub.Init(self._rc_cb, 10)
 
-        pub = ChannelPublisher("rt/lowcmd", LowCmd_)
-        pub.Init()
-        self.pub = pub
+        _lowcmd_pub = ChannelPublisher("rt/lowcmd", LowCmd_)
+        _lowcmd_pub.Init()
+        self._lowcmd_pub = _lowcmd_pub
 
         self.crc = CRC()
 
         while not self.q_setted:
             time.sleep(0.01)
+
         self.background_thread = Thread(target=self._send_loop, daemon=True)
         self.background_thread.start()
 
-    def WirelessControllerHandler(self, msg: WirelessController_):
+    def _rc_cb(self, msg: WirelessController_):
         self.L1 = True if msg.keys == 2 else False
         self.L2 = True if msg.keys == 32 else False
-        self.ball_vel = [msg.lx, msg.ly, msg.rx, msg.ry]
-        # print(self.ball_vel)
+        self.cmd_ball_vel = [msg.lx, msg.ly, msg.rx, msg.ry]
         self.publish_ball_speed()
 
-    def _recv_cb(self, msg: LowState_):
+    def publish_ball_speed(self):
+        msg = Float32MultiArray()
+        msg.data = self.cmd_ball_vel[:2]
+        self.ball_vel_publisher_.publish(msg)
+
+    def _lowstate_cb(self, msg: LowState_):
         self.motor_state_real = msg.motor_state
         if self.q_setted == False:
+            # TODO: seems self.Δq_real here is useless
             for i in range(12):
                 self.Δq_real[i] = self.motor_state_real[i].q - q0_real[i]
             self.q_setted = True
         self.imu = msg.imu_state
-        # self.rc = msg.wireless_remote
-        # for byte in self.rc:
-        #     print(f'{byte:08b}', end=' ')
-        # print()
 
     def _send_loop(self):
-        # return
         cmd = unitree_go_msg_dds__LowCmd_()
         cmd.head[0] = 0xFE
         cmd.head[1] = 0xEF
@@ -206,7 +208,9 @@ class Robot(Node):
             cmd.motor_cmd[i].kd = 0
             cmd.motor_cmd[i].tau = 0
 
-        while not self.stopped.wait(0.005):
+        while not self.stopped.wait(
+            0.005
+        ):  # wait for 5ms until stopped.set() is called
             for i in range(12):
                 cmd.motor_cmd[i].mode = 0x01  # (PMSM) mode
                 cmd.motor_cmd[i].q = q0_real[i] + self.Δq_real[i]
@@ -216,38 +220,22 @@ class Robot(Node):
                 cmd.motor_cmd[i].tau = 0
 
             cmd.crc = self.crc.Crc(cmd)
-            self.pub.Write(cmd)
+            self._lowcmd_pub.Write(cmd)
 
     def get_obs(self):
-        # shorthand
+        # joint pos & vel
         motor_state_sim = [self.motor_state_real[i] for i in sim_idx_to_real_idx]
-
         joint_position = [ms.q - q0 for ms, q0 in zip(motor_state_sim, q0_sim)]
         joint_velocity = [ms.dq for ms in motor_state_sim]
 
-        # imu.gyroscope & .rpy: std::array<float, 3>
-        # imu.quaternion: std::array<float, 4>
-        # => list[float]
+        # imu: gyroscope, quaternion, rpy
         imu = self.imu
         gyroscope = imu.gyroscope  # rpy order, rad/s
         quaternion = imu.quaternion  # (w, x, y, z) order, normalized
         roll, pitch, yaw = imu.rpy  # rpy order, rad
 
-        # rc = self.rc  # std::array<uint8_t, 40> => list[int]
-        # stdlib struct.unpack is faster than convert tensor then .view(torch.float32)
-        # and torch<=1.10 only support .view to dtype with same size
-        # lx, rx, ry, _, ly = self.rocker_struct.unpack(bytes(rc[4:24]))
-        # print(lx, rx, ry, ly)
-        lx, ly, rx, ry = self.ball_vel
-
-        # LSB -> MSB
-        # rc[2] = [R1, L1, start, select][R2, L2, F1, F2]
-        # rc[3] = [A, B, X, Y][up, right, down, left]
-        # button_L1 = rc[2] & 0b0000_0010
-        # button_L2 = rc[2] & 0b0010_0000
-        # for byte in rc:
-        #     print(f'{byte:08b}', end=' ')
-        # print("button_L1: ", button_L1, "button_L2: ", button_L2)
+        # rc
+        lx, ly, rx, ry = self.cmd_ball_vel
 
         return RobotObservation(
             joint_position=joint_position,  # in sim order, relative to q0
@@ -317,8 +305,3 @@ class Robot(Node):
     def to_relax(self):
         self.kp = 0.0
         self.kd = 0.0
-
-    def publish_ball_speed(self):
-        msg = Float32MultiArray()
-        msg.data = self.ball_vel[:2]
-        self.publisher_.publish(msg)
