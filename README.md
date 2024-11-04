@@ -4,7 +4,7 @@
 > Work in progress
  
 TODO: 
-1. A script to turn off the `sport_mode` service.
+1. Control freq. seems too slow.
 2. Remove ROS component.
 
 ## Usage Instructions

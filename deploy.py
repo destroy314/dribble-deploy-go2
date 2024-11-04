@@ -243,6 +243,7 @@ def main():
     policy = load_policy(
         Path(__file__).resolve().parent, model_name="go2_friction", device=device
     )
+    
     rclpy.init()
     robot = Robot()
     env = DribbleEnv(history_len=15, robot=robot)
@@ -267,36 +268,52 @@ def main():
         if robot_obs.L1:
             break
         time.sleep(env.dt)
+        
     print("Robot started, press L2 to stop")
+    
     env.yaw_init = robot_obs.yaw
-    env.buffer[:, 73] = 0.0
+    env.buffer[:, 73] = 0.0  # clear yaw sensor
 
     robot.to_run()
-    i = 0
-    all_obs = []
-    all_actions = []
+    
+    benchmark = False
+    log = False
+    assert not (benchmark and log), "Cannot benchmark and log at the same time"
+    if log:
+        i = 0
+        all_obs = []
+        all_actions = []
+    
     while True:
-        begin = time.perf_counter()
+        if benchmark:
+            begin = time.perf_counter()
+        
         obs, robot_obs = env.observe()
-        all_obs.append(obs[14, 21:33].cpu().numpy())
-        all_actions.append(obs[14, 45:57].cpu().numpy())
-        if i == 0:
-            save_observation_to_file(obs[14], mode="w")
-        else:
-            save_observation_to_file(obs[14], mode="a")
-        i += 1
         action = policy(obs)
         env.advance(action)
         if robot_obs.L2:
             break
-        end = time.perf_counter()
-        print(end - begin)
-        time.sleep(max(0, begin + env.dt - end))
+        
+        if benchmark:
+            end = time.perf_counter()
+            print(end - begin)
+            time.sleep(max(0, begin + env.dt - end))
+        
+        if log:
+            all_obs.append(obs[14, 21:33].cpu().numpy())
+            all_actions.append(obs[14, 45:57].cpu().numpy())
+            
+            i += 1
+            if i == 1:
+                save_observation_to_file(obs[14], mode="w")
+            else:
+                save_observation_to_file(obs[14], mode="a")
 
-    all_obs = np.array(all_obs)
-    all_actions = np.array(all_actions)
-    np.save("all_obs", all_obs, allow_pickle=False)
-    np.save("all_actions", all_actions, allow_pickle=False)
+    if log:
+        all_obs = np.array(all_obs)
+        all_actions = np.array(all_actions)
+        np.save("all_obs", all_obs, allow_pickle=False)
+        np.save("all_actions", all_actions, allow_pickle=False)
 
     robot.to_damp()
     time.sleep(2)

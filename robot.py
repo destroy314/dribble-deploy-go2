@@ -18,8 +18,15 @@ import rclpy
 from rclpy.node import Node
 from std_msgs.msg import Float32MultiArray
 
-# Policy output order: FL, FR, RL, RR
-# Unitree control order: FR, FL, RR, RL
+"""
+id: "FR_0"...
+name: "FR_hip_joint"...
+real_index: 0...
+sim_index: 3...
+
+sim order: FL, FR, RL, RR
+real order: FR, FL, RR, RL
+"""
 id_to_real_index = {
     "FR_0": 0,
     "FR_1": 1,
@@ -34,7 +41,6 @@ id_to_real_index = {
     "RL_1": 10,
     "RL_2": 11,
 }
-
 real_index_to_id = {v: k for k, v in id_to_real_index.items()}
 
 name_to_id = {
@@ -51,7 +57,6 @@ name_to_id = {
     "RR_thigh_joint": "RR_1",
     "RR_calf_joint": "RR_2",
 }
-
 id_to_name = {v: k for k, v in name_to_id.items()}
 
 sim_index_to_name = [
@@ -68,7 +73,6 @@ sim_index_to_name = [
     "RR_thigh_joint",
     "RR_calf_joint",
 ]
-
 name_to_sim_index = {name: i for i, name in enumerate(sim_index_to_name)}
 
 name_to_q0 = {
@@ -86,31 +90,10 @@ name_to_q0 = {
     "RR_calf_joint": -1.5,
 }
 
-LegID = {
-    "FR_0": 0,  # Front right hip
-    "FR_1": 1,  # Front right thigh
-    "FR_2": 2,  # Front right calf
-    "FL_0": 3,
-    "FL_1": 4,
-    "FL_2": 5,
-    "RR_0": 6,
-    "RR_1": 7,
-    "RR_2": 8,
-    "RL_0": 9,
-    "RL_1": 10,
-    "RL_2": 11,
-}
-
-PosStopF = 2.146e9
-VelStopF = 16000.0
-
-
 num_joints = len(sim_index_to_name)
 
 # sim index to real index mapping is for real-to-sim conversion
-# for sim_idx, real_idx in enumerate(sim_index_to_real_index):
-#     assert real_joints[real_idx] == sim_joints[sim_idx]
-sim_idx_to_real_idx = [id_to_real_index[name_to_id[name]] for name in sim_index_to_name]
+sim_idx_to_real_idx = [id_to_real_index[name_to_id[name]] for name in sim_index_to_name]  # [3, 4, 5, 0, 1, 2, 9, 10, 11, 6, 7, 8]
 
 # real index to sim index mapping is for sim-to-real conversion
 # even if dict is ordered in Python 3.7 or later, it is not sorted by its key
@@ -118,12 +101,13 @@ sim_idx_to_real_idx = [id_to_real_index[name_to_id[name]] for name in sim_index_
 # instead of `for id in real_index_to_id.values()`
 real_idx_to_sim_idx = [
     name_to_sim_index[id_to_name[real_index_to_id[i]]] for i in range(num_joints)
-]
-# [3, 4, 5, 0, 1, 2, 9, 10, 11, 6, 7, 8]
+]   # [3, 4, 5, 0, 1, 2, 9, 10, 11, 6, 7, 8]
 
 q0_sim = [name_to_q0[name] for name in sim_index_to_name]
 q0_real = [name_to_q0[id_to_name[real_index_to_id[i]]] for i in range(num_joints)]
 
+PosStopF = 2.146e9
+VelStopF = 16000.0
 
 @dataclass
 class RobotObservation:
@@ -282,10 +266,10 @@ class Robot(Node):
         )
 
     def set_act(self, action: "list[float]"):
-        # print(action)
         self.Δq_real = [action[i] for i in real_idx_to_sim_idx]
 
     def slowly_stand_up(self):
+        """deprecated"""
         import math
 
         stopped = self.stopped
@@ -325,8 +309,6 @@ class Robot(Node):
         self.Δq_real = [0.0 for _ in range(12)]
         self.kp = 30.0
         self.kd = 5.0
-        # self.kp = 20.0
-        # self.kd = 0.5
 
     def to_run(self):
         self.kp = 20.0
