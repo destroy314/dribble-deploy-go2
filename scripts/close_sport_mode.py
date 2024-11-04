@@ -12,7 +12,7 @@ def main(args=None):
     robot_state.Init()
     
     service_name = "sport_mode"
-    _, service_list = robot_state.ServiceList()
+    # _, service_list = robot_state.ServiceList()
     # pprint(f"service list: {service_list}")
 
     code = robot_state.ServiceSwitch(service_name, 0)
@@ -20,10 +20,10 @@ def main(args=None):
         print(f"service {service_name} closed")
     else:
         raise Exception(f"service {service_name} failed to close with return code: {code}")
-    import time
-    time.sleep(15.0)
+    # import time
+    # time.sleep(15.0)
 
-    _, service_list = robot_state.ServiceList()
+    # _, service_list = robot_state.ServiceList()
     # pprint(f"service list: {service_list}")
 
 
