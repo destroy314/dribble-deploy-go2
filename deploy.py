@@ -149,13 +149,13 @@ class DribbleEnv:
     def make_obs(self, robot_obs: RobotObservation) -> torch.Tensor:
         ball_pos = torch.tensor(self.ball_position, device=device)
         projected_gravity = project_gravity(robot_obs.quaternion)
-        commands = [
+        commands = [    # TODO: setting the smaller commands to zero
             # rocker x: left/right
             # rocker y: forward/backward
-            robot_obs.ly * 2,  # x vel
-            robot_obs.lx * 2,  # y vel
+            robot_obs.ly * 2.0,  # x vel  # TODO: ?
+            robot_obs.lx * 2.0,  # y vel
             0.0 * 0.25,  # yaw vel
-            0.0 * 2,  # body height
+            0.0 * 2.0,  # body height
             self.step_frequency,
             self.phase,
             self.offset,
@@ -276,7 +276,7 @@ def main():
 
     robot.to_run()
     
-    benchmark = False
+    benchmark = True
     log = False
     assert not (benchmark and log), "Cannot benchmark and log at the same time"
     if log:
