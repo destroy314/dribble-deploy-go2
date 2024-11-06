@@ -117,7 +117,6 @@ class DribbleEnv:
         robot_obs = self.robot.get_obs()
         obs = self.make_obs(robot_obs)
         self.store_obs(obs)
-        print(f"self.t: {self.t}")
         return self.buffer[self.t - self.history_len : self.t], robot_obs
 
     def store_obs(self, obs: torch.Tensor):
