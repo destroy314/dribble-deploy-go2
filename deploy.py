@@ -91,7 +91,7 @@ class DribbleEnv:
         [0.5, 1, 1] * 4, dtype=torch.float32, device=device
     )
     torque_limit_clip = False
-    set_small_cmd_to_zero = True
+    set_small_cmd_to_zero = False
 
     def __init__(self, history_len: int, robot: Robot):
         assert history_len > 0
@@ -108,7 +108,7 @@ class DribbleEnv:
         )
 
         self.gait_index = 0.0
-        self.yaw_init = None
+        self.yaw_init = 0.0
 
         self.robot = robot
 
@@ -139,9 +139,10 @@ class DribbleEnv:
         self.action_t_minus1[:] = self.action_t
         self.action_t[:] = action
 
-        action_clipped = torch.clip(
-            action, th_clip_actions_low, th_clip_actions_high
-        )  # TODO: seems parkour ignore this clipping
+        # action_clipped = torch.clip(
+        #     action, th_clip_actions_low, th_clip_actions_high
+        # )  # TODO: this clip is important!
+        action_clipped = action
         if self.torque_limit_clip:
             action_scaled = self.clip_by_torque_limit(
                 action_clipped * self.action_scale * self.hip_scale_reduction
@@ -168,7 +169,7 @@ class DribbleEnv:
     def make_obs(self, robot_obs: RobotObservation) -> torch.Tensor:
         ball_pos = torch.tensor(self.ball_position, device=device)
         projected_gravity = np.array(project_gravity(robot_obs.quaternion))
-        projected_gravity = project_gravity / np.linalg.norm(projected_gravity)
+        projected_gravity = projected_gravity / np.linalg.norm(projected_gravity)
         commands = [
             # rocker x: left/right
             # rocker y: forward/backward
@@ -189,9 +190,8 @@ class DribbleEnv:
             0.01 / 2,  # unknown
         ]
         
-        if self.set_small_cmd_to_zero:
-            breakpoint()
-            commands[:2] *= (torch.norm(commands[:2]) > 0.2).float()
+        if self.set_small_cmd_to_zero and np.linalg.norm(commands[:2]) < 0.2:
+            commands[:2] *= 0   # TODO: something error
             
         dof_pos = robot_obs.joint_position
         dof_vel = [v * 0.05 for v in robot_obs.joint_velocity]
@@ -243,8 +243,9 @@ class BallSubscriber(Node):
         assert len(self.env.ball_position) == 3
 
 
-def save_observation_to_file(obs, filename="observation_output.txt", mode="a"):
+def log_to_file(obs, action, filename="./record/record.txt", mode="a"):
     obs = obs.cpu().numpy()
+    action = action.cpu().numpy()
     sensor_info = {
         "ObjectSensor": obs[0:3],
         "OrientationSensor": obs[3:6],
@@ -261,6 +262,8 @@ def save_observation_to_file(obs, filename="observation_output.txt", mode="a"):
     with open(filename, mode) as file:
         for sensor_name, sensor_values in sensor_info.items():
             file.write(f"{sensor_name}: {sensor_values}\n")
+        file.write("-" * 20 + "\n")
+        file.write(f"Action: {action}")
         file.write("-" * 40 + "\n")
 
 
@@ -332,9 +335,9 @@ def main(args):
 
             i += 1
             if i == 1:
-                save_observation_to_file(obs[14], mode="w")
+                log_to_file(obs[-1], action, mode="w")
             else:
-                save_observation_to_file(obs[14], mode="a")
+                log_to_file(obs[-1], action, mode="a")
 
         while time.perf_counter() < begin + env.dt:
             pass
@@ -357,8 +360,8 @@ def main(args):
     if log:
         all_obs = np.array(all_obs)
         all_actions = np.array(all_actions)
-        np.save("all_obs", all_obs, allow_pickle=False)
-        np.save("all_actions", all_actions, allow_pickle=False)
+        np.save("./record/all_obs", all_obs, allow_pickle=False)
+        np.save("./record/all_actions", all_actions, allow_pickle=False)
 
     robot.to_damp()
     time.sleep(3)
