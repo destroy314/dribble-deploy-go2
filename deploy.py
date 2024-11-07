@@ -304,6 +304,8 @@ def main(args):
     benchmark = args.benchmark
     log = args.log
     assert not (benchmark and log), "Cannot benchmark and log at the same time"
+    if benchmark:
+        infer_time = []
     if log:
         i = 0
         all_obs = []
@@ -318,9 +320,10 @@ def main(args):
         if robot_obs.L2:
             break
 
-        if benchmark:  # TODO: compelte benchmark
+        if benchmark:
             end = time.perf_counter()
             print(end - begin)
+            infer_time.append(end - begin)
             # time.sleep(max(0, begin + env.dt - end))
 
         if log:
@@ -336,6 +339,21 @@ def main(args):
         while time.perf_counter() < begin + env.dt:
             pass
 
+    if benchmark:
+        import matplotlib.pyplot as plt
+        avg_infer_time = np.mean(infer_time)
+        max_infer_time = np.max(infer_time)
+        print(f"Average inference time: {avg_infer_time:.6f} seconds")
+        print(f"Max inference time: {max_infer_time:.6f} seconds")
+        plt.figure(figsize=(10, 6))
+        plt.plot(infer_time, label="Inference time", color="blue")
+        plt.xlabel('step')
+        plt.ylabel('Inference time (s)')
+        plt.title('Inference time over steps')
+        plt.legend()
+        plt.grid(True)
+        plt.show()
+        
     if log:
         all_obs = np.array(all_obs)
         all_actions = np.array(all_actions)
