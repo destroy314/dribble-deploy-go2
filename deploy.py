@@ -13,7 +13,7 @@ from threading import Thread
 from utils.math_utils import project_gravity, wrap_to_pi
 from robot import Robot, RobotObservation
 
-device = "cuda:0"
+device = "cpu"
 
 # in sim order
 clip_actions_high = [
@@ -90,6 +90,8 @@ class DribbleEnv:
     hip_scale_reduction = torch.tensor(
         [0.5, 1, 1] * 4, dtype=torch.float32, device=device
     )
+    torque_limit_clip = False
+    set_small_cmd_to_zero = True
 
     def __init__(self, history_len: int, robot: Robot):
         assert history_len > 0
@@ -106,11 +108,16 @@ class DribbleEnv:
         )
 
         self.gait_index = 0.0
-        self.yaw_init = 0.0
+        self.yaw_init = None
 
         self.robot = robot
 
-        self.ball_position = [0.27402842, -0.04910268, 0.0]   # TODO: init with zero position
+        self.ball_position = None
+        self.ball_position = [
+            0.27402842,
+            -0.04910268,
+            0.0,
+        ]  # TODO: init with None
         self.ball_subscriber = BallSubscriber(self)
 
     def observe(self):
@@ -132,20 +139,40 @@ class DribbleEnv:
         self.action_t_minus1[:] = self.action_t
         self.action_t[:] = action
 
-        action_clipped = torch.clip(action, th_clip_actions_low, th_clip_actions_high)
-        # if not torch.allclose(action, action_clipped, atol=0.01):
-        #     print("action clipped")
-        action_scaled = action_clipped * self.action_scale * self.hip_scale_reduction
+        action_clipped = torch.clip(
+            action, th_clip_actions_low, th_clip_actions_high
+        )  # TODO: seems parkour ignore this clipping
+        if self.torque_limit_clip:
+            action_scaled = self.clip_by_torque_limit(
+                action_clipped * self.action_scale * self.hip_scale_reduction
+            )
+        else:
+            action_scaled = action_clipped * self.action_scale * self.hip_scale_reduction
         self.robot.set_act(action_scaled.tolist())
         self.gait_index = (self.gait_index + self.step_frequency * self.dt) % 1
 
+    def clip_by_torque_limit(self, actions_scaled):
+        """TODO: TO BE IMPLEMENTED"""
+        
+        p_limits_low = (-self.torque_limits) + self.d_gains * self.dof_vel_
+        p_limits_high = (self.torque_limits) + self.d_gains * self.dof_vel_
+        actions_low = (
+            (p_limits_low / self.p_gains) - self.default_dof_pos + self.dof_pos_
+        )
+        actions_high = (
+            (p_limits_high / self.p_gains) - self.default_dof_pos + self.dof_pos_
+        )
+
+        return torch.clip(actions_scaled, actions_low, actions_high)
+
     def make_obs(self, robot_obs: RobotObservation) -> torch.Tensor:
         ball_pos = torch.tensor(self.ball_position, device=device)
-        projected_gravity = project_gravity(robot_obs.quaternion)
-        commands = [  # TODO: setting the smaller commands to zero
+        projected_gravity = np.array(project_gravity(robot_obs.quaternion))
+        projected_gravity = project_gravity / np.linalg.norm(projected_gravity)
+        commands = [
             # rocker x: left/right
             # rocker y: forward/backward
-            robot_obs.ly * 2.0,  # x vel  # TODO: ?
+            robot_obs.ly * 2.0,  # x vel
             robot_obs.lx * 2.0,  # y vel
             0.0 * 0.25,  # yaw vel
             0.0 * 2.0,  # body height
@@ -161,6 +188,11 @@ class DribbleEnv:
             0.1 / 2,  # stance length
             0.01 / 2,  # unknown
         ]
+        
+        if self.set_small_cmd_to_zero:
+            breakpoint()
+            commands[:2] *= (torch.norm(commands[:2]) > 0.2).float()
+            
         dof_pos = robot_obs.joint_position
         dof_vel = [v * 0.05 for v in robot_obs.joint_velocity]
         action = self.action_t
@@ -278,8 +310,7 @@ def main(args):
         all_actions = []
 
     while True:
-        if benchmark:
-            begin = time.perf_counter()
+        begin = time.perf_counter()
 
         obs, robot_obs = env.observe()
         action = policy(obs)
@@ -287,11 +318,11 @@ def main(args):
         if robot_obs.L2:
             break
 
-        if benchmark:
+        if benchmark:  # TODO: compelte benchmark
             end = time.perf_counter()
             print(end - begin)
             # time.sleep(max(0, begin + env.dt - end))
-            
+
         if log:
             all_obs.append(obs[14, 21:33].cpu().numpy())
             all_actions.append(obs[14, 45:57].cpu().numpy())
@@ -301,7 +332,7 @@ def main(args):
                 save_observation_to_file(obs[14], mode="w")
             else:
                 save_observation_to_file(obs[14], mode="a")
-        
+
         while time.perf_counter() < begin + env.dt:
             pass
 
@@ -312,7 +343,7 @@ def main(args):
         np.save("all_actions", all_actions, allow_pickle=False)
 
     robot.to_damp()
-    time.sleep(2)
+    time.sleep(3)
     robot.to_relax()
     print("Robot relaxed, press L2 to quit")
     while True:

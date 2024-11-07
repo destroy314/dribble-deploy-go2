@@ -183,7 +183,6 @@ class Robot(Node):
     def _lowstate_cb(self, msg: LowState_):
         self.motor_state_real = msg.motor_state
         if self.q_setted == False:
-            # TODO: seems self.Δq_real here is useless
             for i in range(12):
                 self.Δq_real[i] = self.motor_state_real[i].q - q0_real[i]
             self.q_setted = True
