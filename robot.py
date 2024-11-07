@@ -19,10 +19,10 @@ from rclpy.node import Node
 from std_msgs.msg import Float32MultiArray
 
 """
-id: "FR_0"...
-name: "FR_hip_joint"...
-real_index: 0...
-sim_index: 3...
+id: "FR_0", ...
+name: "FR_hip_joint", ...
+real_index: 0, ...
+sim_index: 3, ...
 
 sim order: FL, FR, RL, RR
 real order: FR, FL, RR, RL
@@ -98,9 +98,6 @@ sim_idx_to_real_idx = [
 ]  # [3, 4, 5, 0, 1, 2, 9, 10, 11, 6, 7, 8]
 
 # real index to sim index mapping is for sim-to-real conversion
-# even if dict is ordered in Python 3.7 or later, it is not sorted by its key
-# thus, we need to use `real_index_to_id[i] for i in range(num_joints)`
-# instead of `for id in real_index_to_id.values()`
 real_idx_to_sim_idx = [
     name_to_sim_index[id_to_name[real_index_to_id[i]]] for i in range(num_joints)
 ]  # [3, 4, 5, 0, 1, 2, 9, 10, 11, 6, 7, 8]
@@ -132,11 +129,9 @@ class RobotObservation:
 class Robot(Node):
     def __init__(self):
         super().__init__("robot_node")
-        # pybind11 will convert std::array into python list
-        self.motor_state_real = None  # std::array<MotorState, 20>
-
+        
+        self.motor_state_real = None
         self.imu = None
-        # self.rc = None
         self.L1 = False
         self.L2 = False
         self.cmd_ball_vel = [0, 0, 0, 0]
@@ -188,7 +183,6 @@ class Robot(Node):
     def _lowstate_cb(self, msg: LowState_):
         self.motor_state_real = msg.motor_state
         if self.q_setted == False:
-            # TODO: seems self.Δq_real here is useless
             for i in range(12):
                 self.Δq_real[i] = self.motor_state_real[i].q - q0_real[i]
             self.q_setted = True

@@ -13,7 +13,7 @@ from threading import Thread
 from utils.math_utils import project_gravity, wrap_to_pi
 from robot import Robot, RobotObservation
 
-device = "cuda:0"
+device = "cpu"
 
 # in sim order
 clip_actions_high = [
@@ -48,7 +48,7 @@ th_clip_actions_high = torch.tensor(clip_actions_high, device=device)
 th_clip_actions_low = torch.tensor(clip_actions_low, device=device)
 
 
-def load_policy(root: Path, model_name: str = "go2_friction", device="cuda:0"):
+def load_policy(root: Path, model_name: str = "go2_friction", device="cpu"):
     body_path = glob.glob(os.path.join(root, "models", model_name, "body*"))[0]
     adaptation_module_path = glob.glob(
         os.path.join(root, "models", model_name, "adaptation_module*")
@@ -60,15 +60,8 @@ def load_policy(root: Path, model_name: str = "go2_friction", device="cuda:0"):
     @torch.no_grad()
     def policy(stacked_history: torch.Tensor):
         # stacked_history: (H, d) = (15, 75)
-
-        # history = stacked_history.reshape(1, 1125)
-        # latent = adaptation_module(history)  # (1, 6)
-        # composed = torch.cat((history, latent), dim=-1)
-        # action = body(composed)
-        # return action[0]
-
-        obs_history = stacked_history.reshape(1, 1125).squeeze().to(device)
-        latent = adaptation_module.forward(obs_history)
+        obs_history = stacked_history.reshape(1, 1125).squeeze().to(device)  # (1125, )
+        latent = adaptation_module.forward(obs_history)  # (6, )
         action = body.forward(torch.cat((obs_history, latent), dim=-1))
         return action
 
@@ -97,6 +90,8 @@ class DribbleEnv:
     hip_scale_reduction = torch.tensor(
         [0.5, 1, 1] * 4, dtype=torch.float32, device=device
     )
+    torque_limit_clip = False
+    set_small_cmd_to_zero = True
 
     def __init__(self, history_len: int, robot: Robot):
         assert history_len > 0
@@ -113,11 +108,16 @@ class DribbleEnv:
         )
 
         self.gait_index = 0.0
-        self.yaw_init = 0.0
+        self.yaw_init = None
 
         self.robot = robot
 
-        self.ball_position = [0.27402842, -0.04910268, 0.0]
+        self.ball_position = None
+        self.ball_position = [
+            0.27402842,
+            -0.04910268,
+            0.0,
+        ]  # TODO: init with None
         self.ball_subscriber = BallSubscriber(self)
 
     def observe(self):
@@ -139,20 +139,40 @@ class DribbleEnv:
         self.action_t_minus1[:] = self.action_t
         self.action_t[:] = action
 
-        action_clipped = torch.clip(action, th_clip_actions_low, th_clip_actions_high)
-        # if not torch.allclose(action, action_clipped, atol=0.01):
-        #     print("action clipped")
-        action_scaled = action_clipped * self.action_scale * self.hip_scale_reduction
+        action_clipped = torch.clip(
+            action, th_clip_actions_low, th_clip_actions_high
+        )  # TODO: seems parkour ignore this clipping
+        if self.torque_limit_clip:
+            action_scaled = self.clip_by_torque_limit(
+                action_clipped * self.action_scale * self.hip_scale_reduction
+            )
+        else:
+            action_scaled = action_clipped * self.action_scale * self.hip_scale_reduction
         self.robot.set_act(action_scaled.tolist())
         self.gait_index = (self.gait_index + self.step_frequency * self.dt) % 1
 
+    def clip_by_torque_limit(self, actions_scaled):
+        """TODO: TO BE IMPLEMENTED"""
+        
+        p_limits_low = (-self.torque_limits) + self.d_gains * self.dof_vel_
+        p_limits_high = (self.torque_limits) + self.d_gains * self.dof_vel_
+        actions_low = (
+            (p_limits_low / self.p_gains) - self.default_dof_pos + self.dof_pos_
+        )
+        actions_high = (
+            (p_limits_high / self.p_gains) - self.default_dof_pos + self.dof_pos_
+        )
+
+        return torch.clip(actions_scaled, actions_low, actions_high)
+
     def make_obs(self, robot_obs: RobotObservation) -> torch.Tensor:
         ball_pos = torch.tensor(self.ball_position, device=device)
-        projected_gravity = project_gravity(robot_obs.quaternion)
-        commands = [    # TODO: setting the smaller commands to zero
+        projected_gravity = np.array(project_gravity(robot_obs.quaternion))
+        projected_gravity = project_gravity / np.linalg.norm(projected_gravity)
+        commands = [
             # rocker x: left/right
             # rocker y: forward/backward
-            robot_obs.ly * 2.0,  # x vel  # TODO: ?
+            robot_obs.ly * 2.0,  # x vel
             robot_obs.lx * 2.0,  # y vel
             0.0 * 0.25,  # yaw vel
             0.0 * 2.0,  # body height
@@ -168,6 +188,11 @@ class DribbleEnv:
             0.1 / 2,  # stance length
             0.01 / 2,  # unknown
         ]
+        
+        if self.set_small_cmd_to_zero:
+            breakpoint()
+            commands[:2] *= (torch.norm(commands[:2]) > 0.2).float()
+            
         dof_pos = robot_obs.joint_position
         dof_vel = [v * 0.05 for v in robot_obs.joint_velocity]
         action = self.action_t
@@ -239,11 +264,11 @@ def save_observation_to_file(obs, filename="observation_output.txt", mode="a"):
         file.write("-" * 40 + "\n")
 
 
-def main():
+def main(args):
     policy = load_policy(
-        Path(__file__).resolve().parent, model_name="go2_friction", device=device
+        Path(__file__).resolve().parent, model_name=args.model_name, device=device
     )
-    
+
     rclpy.init()
     robot = Robot()
     env = DribbleEnv(history_len=15, robot=robot)
@@ -268,47 +293,67 @@ def main():
         if robot_obs.L1:
             break
         time.sleep(env.dt)
-        
+
     print("Robot started, press L2 to stop")
-    
+
     env.yaw_init = robot_obs.yaw
     env.buffer[:, 73] = 0.0  # clear yaw sensor
 
     robot.to_run()
-    
-    benchmark = True
-    log = False
+
+    benchmark = args.benchmark
+    log = args.log
     assert not (benchmark and log), "Cannot benchmark and log at the same time"
+    if benchmark:
+        infer_time = []
     if log:
         i = 0
         all_obs = []
         all_actions = []
-    
+
     while True:
-        if benchmark:
-            begin = time.perf_counter()
-        
+        begin = time.perf_counter()
+
         obs, robot_obs = env.observe()
         action = policy(obs)
         env.advance(action)
         if robot_obs.L2:
             break
-        
+
         if benchmark:
             end = time.perf_counter()
             print(end - begin)
-            time.sleep(max(0, begin + env.dt - end))
-        
+            infer_time.append(end - begin)
+            # time.sleep(max(0, begin + env.dt - end))
+
         if log:
             all_obs.append(obs[14, 21:33].cpu().numpy())
             all_actions.append(obs[14, 45:57].cpu().numpy())
-            
+
             i += 1
             if i == 1:
                 save_observation_to_file(obs[14], mode="w")
             else:
                 save_observation_to_file(obs[14], mode="a")
 
+        while time.perf_counter() < begin + env.dt:
+            pass
+
+    if benchmark:
+        import matplotlib.pyplot as plt
+        avg_infer_time = np.mean(infer_time)
+        max_infer_time = np.max(infer_time)
+        print(f"Average inference time: {avg_infer_time:.6f} seconds")
+        print(f"Max inference time: {max_infer_time:.6f} seconds")
+        plt.figure(figsize=(10, 6))
+        plt.plot(infer_time, label="Inference time", color="blue")
+        plt.xlabel('step')
+        plt.ylabel('Inference time (s)')
+        plt.title('Inference time over steps')
+        plt.legend()
+        plt.grid(True)
+        plt.show()
+        
     if log:
         all_obs = np.array(all_obs)
         all_actions = np.array(all_actions)
@@ -316,7 +361,7 @@ def main():
         np.save("all_actions", all_actions, allow_pickle=False)
 
     robot.to_damp()
-    time.sleep(2)
+    time.sleep(3)
     robot.to_relax()
     print("Robot relaxed, press L2 to quit")
     while True:
@@ -329,4 +374,13 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    import argparse
+
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument("--model_name", type=str, default="go2_friction_2")
+    parser.add_argument("--log", action="store_true", default=False)
+    parser.add_argument("--benchmark", action="store_true", default=False)
+
+    args = parser.parse_args()
+    main(args)

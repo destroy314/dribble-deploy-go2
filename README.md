@@ -9,9 +9,16 @@ TODO:
 
 ## Usage Instructions
 
+### Close sport mode
+
+```bash
+cd scripts
+python3 close_sport_mode.py
+```
+
 ### Start and stop running
 
-Modify model path at deploy.py: load_policy(), turn off the sport_mode service, make dog prone, then:
+Modify model path at `deploy.py`: load_policy(), make dog prone, then:
 
 ```bash
 export ROS_DOMAIN_ID=1
