@@ -13,13 +13,13 @@ class BallPositionNode(Node):
         self.publisher_ = self.create_publisher(Float32MultiArray, 'ball_position', 10)
 
         # 加载相机内参矩阵和畸变参数
-        with open('calibration_params.pickle', 'rb') as f:
+        with open('./calib_pickle/calibration_params.pickle', 'rb') as f:
             calibration_params = pickle.load(f)
         self.K = calibration_params['K']
         self.D = calibration_params['D']
 
         # 加载外参
-        with open('custom_coordinate_system.pickle', 'rb') as f:
+        with open('./calib_pickle/custom_coordinate_system.pickle', 'rb') as f:
             extrinsics = pickle.load(f)
         self.R = extrinsics['R']  # 旋转矩阵
         self.t = extrinsics['t']  # 平移向量

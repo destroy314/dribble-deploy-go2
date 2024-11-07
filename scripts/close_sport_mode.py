@@ -30,7 +30,7 @@ def main(args=None):
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument('--eth', type=str, default='enp61s0')
+    parser.add_argument('--eth', type=str)
     args = parser.parse_args()
     
     main(args)
