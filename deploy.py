@@ -139,10 +139,10 @@ class DribbleEnv:
         self.action_t_minus1[:] = self.action_t
         self.action_t[:] = action
 
-        # action_clipped = torch.clip(
-        #     action, th_clip_actions_low, th_clip_actions_high
-        # )  # TODO: this clip is important!
-        action_clipped = action
+        action_clipped = torch.clip(
+            action, th_clip_actions_low, th_clip_actions_high
+        )  # TODO: this clip is important!
+        # action_clipped = action
         if self.torque_limit_clip:
             action_scaled = self.clip_by_torque_limit(
                 action_clipped * self.action_scale * self.hip_scale_reduction
@@ -239,11 +239,12 @@ class BallSubscriber(Node):
         self.subscription  # prevent unused variable warning
 
     def listener_callback(self, msg):
-        self.env.ball_position = np.array(msg.data) / 1000.0
-        assert len(self.env.ball_position) == 3
+        # self.env.ball_position = np.array(msg.data) / 1000.0
+        # assert len(self.env.ball_position) == 3
+        pass
 
 
-def log_to_file(obs, action, filename="./record/record.txt", mode="a"):
+def log_to_file(obs, action, filename="./record/record_2.txt", mode="a"):
     obs = obs.cpu().numpy()
     action = action.cpu().numpy()
     sensor_info = {
