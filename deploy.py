@@ -312,8 +312,11 @@ def main(args):
         infer_time = []
     if log:
         i = 0
-        all_obs = []
-        all_actions = []
+        print(f"step: {i}")
+        total_eval_steps = 500
+        store_obs = np.zeros((total_eval_steps, 15, 75), dtype=np.float32)
+        # all_obs = []
+        # all_actions = []
 
     while True:
         begin = time.perf_counter()
@@ -331,9 +334,13 @@ def main(args):
             # time.sleep(max(0, begin + env.dt - end))
 
         if log:
-            all_obs.append(obs[14, 21:33].cpu().numpy())
-            all_actions.append(obs[14, 45:57].cpu().numpy())
+            # all_obs.append(obs[14, 21:33].cpu().numpy())
+            # all_actions.append(obs[14, 45:57].cpu().numpy())
+            store_obs[i] = obs.cpu().numpy()
 
+            if i == total_eval_steps - 1:
+                break
+            
             i += 1
             if i == 1:
                 log_to_file(obs[-1], action, mode="w")
@@ -359,10 +366,11 @@ def main(args):
         plt.show()
         
     if log:
-        all_obs = np.array(all_obs)
-        all_actions = np.array(all_actions)
-        np.save("./record/all_obs", all_obs, allow_pickle=False)
-        np.save("./record/all_actions", all_actions, allow_pickle=False)
+        np.save("./record/store_obs", store_obs, allow_pickle=False)
+        # all_obs = np.array(all_obs)
+        # all_actions = np.array(all_actions)
+        # np.save("./record/all_obs", all_obs, allow_pickle=False)
+        # np.save("./record/all_actions", all_actions, allow_pickle=False)
 
     robot.to_damp()
     time.sleep(3)
